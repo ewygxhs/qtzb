@@ -129,7 +129,7 @@
     <!-- 加载动画 -->
     <div class="loader-container">
         <div class="loader"></div>
-        <div class="loading-text">正在准备内容...</div>
+        <div class="loading-text">安全检查中...</div>
     </div>
     
     <!-- 错误信息容器 -->
@@ -149,32 +149,27 @@
         frameborder="0"
         scrolling="yes"
         allow="fullscreen"
-        sandbox="allow-scripts allow-same-origin"
-        allowfullscreen></iframe>
+        allowfullscreen
+        sandbox="allow-same-origin allow-scripts"></iframe>
 
     <script>
-        // 检测运行环境
-        function detectEnvironment() {
-            const ua = navigator.userAgent;
-            return {
-                isWeChat: /MicroMessenger/i.test(ua),
-                isAndroid: /Android/i.test(ua),
-                isIOS: /iPhone|iPad|iPod/i.test(ua),
-                isSafari: /Safari/i.test(ua) && !/Chrome/i.test(ua)
-            };
+        // 检测微信环境
+        function isWeChatBrowser() {
+            return /MicroMessenger/i.test(navigator.userAgent);
         }
-
-        // 安全构建URL
+        
+        // 安全构建目标URL
         function buildTargetUrl(pathParam) {
             if (!pathParam) return null;
             
-            // 安全参数过滤（只允许字母、数字、短横线、下划线和斜杠）
+            // URL安全过滤（允许字母、数字、短横线、下划线和斜杠）
             const cleanParam = pathParam.replace(/[^a-zA-Z0-9\-_\/]/g, '');
             if (!cleanParam) return null;
             
+            // 完整URL构造
             return `https://vip.fmkefu.com/c/${encodeURIComponent(cleanParam)}`;
         }
-
+        
         // 显示错误信息
         function showError(message, detail, targetUrl) {
             const loader = document.querySelector('.loader-container');
@@ -194,85 +189,68 @@
                 manualLink.style.display = 'none';
             }
         }
-
-        // 处理WiFi和流量网络差异的问题
-        function handleNetworkDifferences() {
-            // 安卓微信特有的网络处理
-            return new Promise((resolve) => {
-                if (detectEnvironment().isAndroid && detectEnvironment().isWeChat) {
-                    // 添加网络状态检测
-                    window.addEventListener('online', () => resolve(true));
-                    window.addEventListener('offline', () => {
-                        showError(
-                            '网络连接不可用', 
-                            '请检查您的WiFi或移动数据连接是否正常'
-                        );
-                    });
-                    
-                    // 添加手动重试按钮
-                    setTimeout(() => resolve(true), 1500);
-                } else {
-                    resolve(true);
-                }
-            });
-        }
-
-        // 使用最优方法加载目标内容
-        function loadTargetContent(targetUrl) {
-            const env = detectEnvironment();
+        
+        // 微信环境iframe加载处理
+        function loadForWeChat(targetUrl) {
             const frame = document.getElementById('contentFrame');
             const loader = document.querySelector('.loader-container');
             
-            // 安卓微信环境使用特殊跳转方案
-            if (env.isWeChat && env.isAndroid) {
-                const link = document.createElement('a');
-                link.href = targetUrl;
-                link.target = '_blank';
-                link.style.display = 'none';
-                document.body.appendChild(link);
-                
-                setTimeout(() => {
-                    try {
-                        link.click();
-                    } catch (e) {
-                        // 尝试直接跳转作为备选方案
-                        window.location.href = targetUrl;
-                    }
-                    document.body.removeChild(link);
-                }, 1500);
-                return;
-            }
-            
-            // iOS和其他环境使用iframe加载
-            frame.onload = () => {
+            // 微信特有加载逻辑
+            frame.onload = function() {
                 loader.style.display = 'none';
                 frame.style.display = 'block';
+                
+                // iOS微信额外处理
+                if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                    frame.contentWindow.focus();
+                }
             };
             
-            frame.onerror = () => {
+            frame.onerror = function() {
                 showError(
-                    '内容加载失败', 
-                    '目标网站可能限制加载或网络连接有问题',
+                    '无法加载内容', 
+                    '微信安全策略限制了页面加载，请尝试其他网络环境',
                     targetUrl
                 );
             };
             
+            // 安卓微信特殊优化
+            if (/Android/i.test(navigator.userAgent)) {
+                frame.srcdoc = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <script>
+                            window.onload = function() {
+                                window.location.replace("${targetUrl.replace(/"/g, '\\"')}");
+                            }
+                        </script>
+                    </head>
+                    <body style="background:#000;"></body>
+                    </html>
+                `;
+            } else {
+                // 非安卓使用常规加载
+                frame.src = targetUrl;
+            }
+            
             // 设置加载超时
             setTimeout(() => {
-                if (frame.style.display !== 'block' && !frame.contentDocument) {
+                if (frame.style.display !== 'block' && 
+                   (!frame.contentDocument || frame.contentDocument.readyState !== 'complete')) {
                     showError(
                         '加载超时', 
-                        '请检查网络连接后重试',
+                        '请检查网络连接后重试，建议切换到4G/5G网络',
                         targetUrl
                     );
                 }
-            }, 8000);
-            
-            frame.src = targetUrl;
+            }, 10000);
         }
 
         // 主初始化函数
-        async function init() {
+        function init() {
             try {
                 // 解析URL参数
                 const params = new URLSearchParams(window.location.search);
@@ -281,32 +259,35 @@
                 // 构建目标URL
                 const targetUrl = buildTargetUrl(pathParam);
                 
+                // 参数有效性检查
                 if (!targetUrl) {
                     showError(
-                        '参数格式不正确', 
-                        `请提供有效的 "p" 参数<br>当前参数: ${pathParam || '未提供'}`
+
+                        `URL参数 "p" 格式无效br>
                     );
                     return;
                 }
                 
                 // 更新加载状态
-                document.querySelector('.loading-text').textContent = '加载中...';
+                document.querySelector('.loading-text').textContent = '安全检测通过，正在加载...';
                 
-                // 处理网络差异
-                await handleNetworkDifferences();
-                
-                // 加载目标内容
-                loadTargetContent(targetUrl);
+                // 微信环境使用特殊加载逻辑
+                if (isWeChatBrowser()) {
+                    loadForWeChat(targetUrl);
+                } else {
+                    // 非微信环境直接加载
+                    const frame = document.getElementById('contentFrame');
+                    frame.onload = function() {
+                        document.querySelector('.loader-container').style.display = 'none';
+                        frame.style.display = 'block';
+                    };
+                    frame.src = targetUrl;
+                }
                 
             } catch (error) {
                 showError('初始化失败', `错误详情: ${error.message}`);
             }
         }
-
-        // 页面加载完成后初始化
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(init, 500); // 延迟初始化确保DOM完全加载
-        });
         
         // 防止多点触控缩放
         document.addEventListener('touchstart', function(e) {
@@ -314,6 +295,9 @@
                 e.preventDefault();
             }
         }, { passive: false });
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>
